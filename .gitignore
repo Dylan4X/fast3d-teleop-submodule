@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.DS_Store
+
+# local experiment artifacts
+output/
+*.mp4
+*.jsonl
+*.npz
+*.engine
+
+# local copied videos
+test.mp4
+test_6fps.mp4
