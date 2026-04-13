@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fast3d-teleop-submodule"
-version = "0.1.0"
-description = "Teleoperation-oriented Fast-SAM-3D-Body submodule for RGB-to-SMPL control packets."
+version = "0.3.0"
+description = "Vision mocap backend for Teleopit — RGB-to-SMPL-to-ZMQ pipeline. Vendored glue code, minimal upstream dependency."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -17,6 +17,15 @@ dependencies = [
   "opencv-python",
   "scipy",
 ]
+
+[project.optional-dependencies]
+server = [
+  "pyzmq>=25",
+  "msgpack>=1.0",
+]
+
+[project.scripts]
+fast3d-mocap-server = "fast3d_teleop_submodule.server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
