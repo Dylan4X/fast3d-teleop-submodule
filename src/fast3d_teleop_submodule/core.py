@@ -131,6 +131,41 @@ class Fast3DTeleopSubmodule:
         self.gravity_direction = gravity
         self.R_world_cam = build_camera_to_world_rotation(gravity)
 
+    # ------------------------------------------------------------------
+    # Gravity auto-calibration
+    # ------------------------------------------------------------------
+    def estimate_gravity_from_packets(
+        self, packets: list[TeleopPosePacket]
+    ) -> np.ndarray:
+        """Estimate camera-frame gravity direction from body orientations.
+
+        Assumes people are *approximately* upright.  The SMPL body frame has
+        Y-up, so the body quaternion (camera frame) maps [0, 1, 0] to the
+        "up" direction in camera space; gravity is opposite.
+        """
+        up_vectors = []
+        for pkt in packets:
+            R_body = Rotation.from_quat(pkt.body_quat_xyzw_cam)
+            up_cam = R_body.apply(np.array([0.0, 1.0, 0.0]))
+            up_vectors.append(up_cam)
+        avg_up = np.mean(up_vectors, axis=0)
+        norm = np.linalg.norm(avg_up)
+        if norm < 1e-8:
+            return self.gravity_direction
+        return (-avg_up / norm).astype(np.float64)
+
+    def update_gravity(self, gravity_cam: np.ndarray) -> None:
+        """Overwrite the gravity direction and rebuild R_world_cam."""
+        gravity_cam = np.asarray(gravity_cam, dtype=np.float64)
+        gravity_cam = gravity_cam / max(np.linalg.norm(gravity_cam), 1e-8)
+        self.gravity_direction = gravity_cam
+        self.R_world_cam = self._build_cwrot(gravity_cam)
+
+    @staticmethod
+    def _build_cwrot(gravity_cam: np.ndarray):
+        from .vendor.gravity_alignment import build_camera_to_world_rotation
+        return build_camera_to_world_rotation(gravity_cam)
+
     @staticmethod
     def _normalize_config(config: Fast3DTeleopSubmoduleConfig) -> Fast3DTeleopSubmoduleConfig:
         mode = str(config.mode).lower().strip()

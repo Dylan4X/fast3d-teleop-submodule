@@ -57,6 +57,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="Loop video when reaching the end")
     p.add_argument("--warmup-frames", type=int, default=30,
                     help="Frames to run before publishing (default: 30)")
+    p.add_argument("--no-gravity-calibration", action="store_true",
+                    help="Skip auto-calibrating gravity from warmup body orientations")
+    # Camera parameters
+    p.add_argument("--gravity", type=str, default=None,
+                    help="Gravity direction in camera frame, comma-separated (e.g. 0.05,0.99,-0.02)")
+    p.add_argument("--intrinsics-json", type=str, default=None,
+                    help="Path to intrinsics JSON (with 'gravity' and optional 'camera_matrix')")
     return p.parse_args(argv)
 
 
@@ -79,11 +86,35 @@ def main(argv: list[str] | None = None) -> None:
 
     from .core import Fast3DTeleopSubmodule, Fast3DTeleopSubmoduleConfig
 
+    # ---- Load camera params from JSON / CLI ----
+    cam_intrinsics = None
+    gravity_dir = None
+
+    if args.intrinsics_json:
+        import json as _json
+        with open(args.intrinsics_json, "r") as f:
+            intr = _json.load(f)
+        if "gravity" in intr:
+            g = intr["gravity"]
+            gravity_dir = (float(g[0]), float(g[1]), float(g[2]))
+            logger.info("Gravity from JSON: [%.3f,%.3f,%.3f]", *gravity_dir)
+        if "camera_matrix" in intr:
+            cam_intrinsics = np.array(intr["camera_matrix"], dtype=np.float32)
+            if cam_intrinsics.ndim == 2:
+                cam_intrinsics = cam_intrinsics[np.newaxis, ...]  # (1,3,3)
+            logger.info("Camera intrinsics loaded from JSON")
+
+    if args.gravity:
+        parts = [float(x.strip()) for x in args.gravity.split(",")]
+        gravity_dir = (parts[0], parts[1], parts[2])
+        logger.info("Gravity from CLI: [%.3f,%.3f,%.3f]", *gravity_dir)
+
     config = Fast3DTeleopSubmoduleConfig(
         mode=args.mode,
         image_size=args.image_size,
         smpl_model_path=args.smpl_model_path,
         project_root=args.project_root,
+        **(dict(gravity_direction=gravity_dir) if gravity_dir else {}),
     )
     submodule = Fast3DTeleopSubmodule(config)
     logger.info("Model loaded in %.1fs", time.monotonic() - t0)
@@ -120,8 +151,9 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as e:
             logger.warning("Estimator warmup failed: %s", e)
 
-        # Process real frames to warm caches
+        # Process real frames to warm caches + collect body quats for gravity
         wu_ok = 0
+        wu_packets = []
         for _ in range(args.warmup_frames):
             ok, frame_bgr = cap.read()
             if not ok:
@@ -132,10 +164,25 @@ def main(argv: list[str] | None = None) -> None:
             pkt = submodule.process_frame(frame_bgr, timestamp=time.monotonic())
             if pkt is not None:
                 wu_ok += 1
+                wu_packets.append(pkt)
         import torch
         torch.cuda.synchronize()
         logger.info("Warmup done: %d/%d valid in %.1fs",
                      wu_ok, args.warmup_frames, time.monotonic() - t_wu)
+
+        # Auto-calibrate gravity from warmup body orientations
+        # Skip if user provided explicit gravity via --gravity or --intrinsics-json
+        skip_cal = args.no_gravity_calibration or gravity_dir is not None
+        if wu_packets and not skip_cal:
+            g_old = submodule.gravity_direction.copy()
+            g_new = submodule.estimate_gravity_from_packets(wu_packets)
+            submodule.update_gravity(g_new)
+            logger.info(
+                "Gravity auto-calibrated: [%.3f,%.3f,%.3f] → [%.3f,%.3f,%.3f]",
+                g_old[0], g_old[1], g_old[2],
+                g_new[0], g_new[1], g_new[2],
+            )
+
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     # ---- Main loop ----
@@ -168,7 +215,8 @@ def main(argv: list[str] | None = None) -> None:
                     break
 
             packet = submodule.process_frame(
-                frame_bgr, timestamp=time.monotonic()
+                frame_bgr, timestamp=time.monotonic(),
+                cam_intrinsics=cam_intrinsics,
             )
             if packet is None:
                 continue

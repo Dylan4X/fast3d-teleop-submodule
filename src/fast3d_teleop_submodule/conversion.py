@@ -1,4 +1,19 @@
-"""Convert TeleopPosePacket to Teleopit-compatible HumanFrame."""
+"""Convert TeleopPosePacket to Teleopit-compatible HumanFrame.
+
+Coordinate system notes
+-----------------------
+Our pipeline (gravity_alignment.py → pose_protocol.py) already produces output
+in a **Z-up** world frame with PICO-protocol orientation adjustments applied.
+
+Teleopit's Pico4InputProvider converts Pico4 SDK data (Y-up) to Z-up via
+``_INPUT_TO_TELEOPIT_MATRIX = [[1,0,0],[0,0,-1],[0,1,0]]``.  Since our
+pipeline independently produces Z-up output, we do NOT apply that matrix
+again (it would double-transform).
+
+If the retargetted pose looks mirrored or rotated 90°, set
+``EXTRA_COORD_TRANSFORM`` to an appropriate 3×3 rotation to fix the axis
+convention mismatch.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +41,14 @@ JOINT_PARENTS = np.array([
     16, 17, 18, 19, 20, 21,
 ], dtype=np.int32)
 
+# Post-FK coordinate transform: convert from Y-up (our pipeline output after
+# GLOBAL_ORIENT_EXTRA_ROT in pose_protocol) to Z-up (Teleopit convention).
+# Same matrix used by Teleopit's Pico4InputProvider._coordinate_transform_input().
+# Maps [x, y, z] → [x, -z, y]:  Y-up → Z-up
+EXTRA_COORD_TRANSFORM: np.ndarray = np.array(
+    [[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64
+)
+
 
 def packet_to_human_frame(packet: TeleopPosePacket) -> dict:
     """Convert TeleopPosePacket to Teleopit HumanFrame dict.
@@ -33,9 +56,9 @@ def packet_to_human_frame(packet: TeleopPosePacket) -> dict:
     Returns ``{joint_name: [pos_xyz_list, quat_wxyz_list], ...}``
     compatible with Teleopit's ``ZMQInputProvider._deserialize_frame()``.
 
-    Positions and orientations are placed in the same coordinate frame as
-    ``body_quat_wxyz`` (the published root orientation, including PICO-protocol
-    adjustment rotations).
+    The output coordinate frame is Z-up, produced by gravity_alignment +
+    pose_protocol transforms.  An optional ``EXTRA_COORD_TRANSFORM`` 3×3
+    matrix is applied last if set (default: identity / no-op).
     """
     body_q_wxyz = np.asarray(packet.body_quat_wxyz, dtype=np.float64)
     joints_local = np.asarray(packet.smpl_joints_local, dtype=np.float64)
@@ -63,12 +86,19 @@ def packet_to_human_frame(packet: TeleopPosePacket) -> dict:
         )
         world_rots[j] = world_rots[JOINT_PARENTS[j]] * local_rot
 
-    # Build HumanFrame dict
+    # Build HumanFrame dict — apply optional extra coordinate transform
+    R_extra = None
+    if EXTRA_COORD_TRANSFORM is not None:
+        R_extra = Rotation.from_matrix(EXTRA_COORD_TRANSFORM)
+
     frame: dict = {}
     for i, name in enumerate(BODY_JOINT_NAMES):
-        pos = world_positions[i].tolist()
+        pos = world_positions[i]
         q_xyzw = world_rots[i].as_quat()
+        if R_extra is not None:
+            pos = EXTRA_COORD_TRANSFORM @ pos
+            q_xyzw = (R_extra * Rotation.from_quat(q_xyzw)).as_quat()
         q_wxyz = [float(q_xyzw[3]), float(q_xyzw[0]),
                    float(q_xyzw[1]), float(q_xyzw[2])]
-        frame[name] = [pos, q_wxyz]
+        frame[name] = [pos.tolist(), q_wxyz]
     return frame

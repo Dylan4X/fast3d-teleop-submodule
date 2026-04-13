@@ -43,6 +43,37 @@ fast3d-mocap-server \
   --source 0 --port 5556 --show-preview \
   --smpl-model-path /path/to/SMPL_NEUTRAL.pkl \
   --project-root /path/to/Fast-SAM-3D-Body
+
+# 使用 RealSense 标定文件（含重力方向 + 相机内参）
+fast3d-mocap-server \
+  --source 0 \
+  --intrinsics-json /path/to/intrinsics.json \
+  --smpl-model-path /path/to/SMPL_NEUTRAL.pkl \
+  --project-root /path/to/Fast-SAM-3D-Body
+
+# 手动指定重力方向（相机坐标系）
+fast3d-mocap-server \
+  --source 0 \
+  --gravity 0.05,0.99,-0.02 \
+  --smpl-model-path /path/to/SMPL_NEUTRAL.pkl \
+  --project-root /path/to/Fast-SAM-3D-Body
+```
+
+#### 重力方向设置
+
+重力方向决定了姿态输出的竖直对齐精度。支持三种来源（优先级从高到低）：
+
+1. **`--gravity`** — 直接传入相机坐标系下的重力向量
+2. **`--intrinsics-json`** — 从 `record_realsense.py` 输出的标定 JSON 文件读取（含 IMU 重力标定）
+3. **Warmup 自动标定** — 无相机 IMU 时，利用 warmup 期间的人体朝向估算重力（假设人近似直立）
+
+标定 JSON 格式（与上游 `record_realsense.py` 一致）：
+
+```json
+{
+  "camera_matrix": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+  "gravity": [gx, gy, gz]
+}
 ```
 
 ### CLI 参数
@@ -61,6 +92,9 @@ fast3d-mocap-server \
 | `--loop-video` | `false` | 视频播完后循环 |
 | `--show-preview` | `false` | 显示 OpenCV 预览 |
 | `--fps-limit` | `0` | 最大输出 FPS（0=不限） |
+| `--gravity` | `None` | 相机坐标系重力方向（逗号分隔，如 `0.05,0.99,-0.02`） |
+| `--intrinsics-json` | `None` | 标定 JSON 文件路径（含 `gravity` 和可选 `camera_matrix`） |
+| `--no-gravity-calibration` | `false` | 跳过 warmup 自动重力标定 |
 
 ### Python API
 
@@ -115,13 +149,15 @@ fast3d-mocap-server \
 
 ```yaml
 # teleopit/configs/input/zmq_fast3d.yaml
-input:
-  _target_: teleopit.inputs.zmq_provider.ZMQInputProvider
-  host: "<GPU机器IP>"     # 如 192.168.1.100
-  port: 5555
-  topic: "mocap"
-  human_format: "xrobot"  # 24 SMPL joints, pos+quat
+provider: zmq_pico4
+zmq_host: "<GPU机器IP>"     # 如 192.168.1.100
+zmq_port: 5555
+zmq_topic: "mocap"           # ⚠ 默认是 "pico4"，这里要改成 "mocap"
+human_format: "xrobot"       # 24 SMPL joints, pos+quat → xrobot_to_g1.json IK
 ```
+
+> **注意**：Teleopit 的 input provider 使用工厂模式（`factory.py` → `_build_input_provider()`），
+> 而非 Hydra `_target_` 实例化。`provider: zmq_pico4` 会自动构建 `ZMQInputProvider`。
 
 **3. 启动 Teleopit：**
 
@@ -146,12 +182,24 @@ python -m teleopit.run \
     "Spine1":         [[x, y, z], [qw, qx, qy, qz]],
     # ... 共 24 个 SMPL 关节（见 conversion.py BODY_JOINT_NAMES）
     "_ts": 1234567.89,   # monotonic 时间戳 (float)
-    "_seq": 42            # 帧序号 (int)
+    "_seq": 42            # 帧序号 (int), Teleopit 自动 pop
 }
 ```
 
 24 个关节名称按 SMPL 标准排列：
 `Pelvis, Left_Hip, Right_Hip, Spine1, Left_Knee, Right_Knee, Spine2, Left_Ankle, Right_Ankle, Spine3, Left_Foot, Right_Foot, Neck, Left_Collar, Right_Collar, Head, Left_Shoulder, Right_Shoulder, Left_Elbow, Right_Elbow, Left_Wrist, Right_Wrist, Left_Hand, Right_Hand`
+
+### 坐标系
+
+数据经过 `gravity_alignment.py` → `pose_protocol.py` → `EXTRA_COORD_TRANSFORM` 的变换链后，
+输出为 **Z-up** 世界坐标系，与 Teleopit 期望一致。
+
+变换链：
+1. `gravity_alignment.py`：相机帧 → 重力对齐 Z-up 世界帧
+2. `pose_protocol.py`：`GLOBAL_ORIENT_EXTRA_ROT = Ry(90°) × Rx(-90°)`，输出变为 Y-up
+3. `conversion.py`：`EXTRA_COORD_TRANSFORM = [[1,0,0],[0,0,-1],[0,1,0]]`，Y-up → Z-up
+
+最终 `EXTRA_COORD_TRANSFORM` 矩阵与 Teleopit 的 `_INPUT_TO_TELEOPIT_MATRIX` 完全一致。
 
 ## 性能
 
@@ -176,6 +224,9 @@ fast3d-teleop-submodule/
 ├── pyproject.toml          # 包配置，CLI entry point
 ├── README.md
 ├── LICENSE
+├── scripts/
+│   ├── visualize_skeleton.py       # 3D 骨架实时可视化
+│   └── visualize_sidebyside.py     # 原视频 + 骨架对比可视化
 └── src/
     └── fast3d_teleop_submodule/
         ├── __init__.py
@@ -187,6 +238,21 @@ fast3d-teleop-submodule/
             ├── gravity_alignment.py      # 重力对齐 / 坐标变换
             ├── multiview_mhr2smpl.py     # MHR → SMPL 神经网络转换
             └── pose_protocol.py          # PICO 协议姿态输出
+```
+
+## 可视化工具
+
+需要先启动 mocap server，然后连接 ZMQ 订阅数据：
+
+```bash
+# 3D 骨架可视化（保存为视频）
+python scripts/visualize_skeleton.py --save /tmp/skeleton.mp4
+
+# 原视频 + 3D 骨架并排对比
+python scripts/visualize_sidebyside.py \
+  --video /path/to/test.mp4 \
+  --save /tmp/sidebyside.mp4 \
+  --max-frames 200
 ```
 
 ## 与上游 Fast-SAM-3D-Body 的关系

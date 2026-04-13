@@ -20,3 +20,6 @@ output/
 # local copied videos
 test.mp4
 test_6fps.mp4
+*.mp4
+__pycache__/
+*.egg-info/
