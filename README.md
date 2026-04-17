@@ -430,33 +430,6 @@ Fast-SAM-3D-Body（上游，运行时 import）
 
 ---
 
-## 常见问题
-
-### Q: TRT engine 能跨 GPU 使用吗？
-
-不能。`.engine` 文件绑定到特定 GPU 架构（如 sm_89 = RTX 4090）和 TensorRT 版本。换 GPU 需要重新运行 `fast3d-build-trt`。
-
-### Q: 不装 TensorRT 能用吗？
-
-可以。设置环境变量关闭 TRT：
-```bash
-USE_TRT_BACKBONE=0 FOV_TRT=0 fast3d-mocap-server ...
-```
-或者不构建 TRT engine，程序会自动回退到 PyTorch。
-
-### Q: SMPL_NEUTRAL.pkl 哪里下载？
-
-- [SMPL 官网](https://smpl.is.tue.mpg.de/) — 注册后下载（推荐）
-- 如果你有 GVHMR/HumanML3D/Human4DiT 等项目，它们通常自带此文件
-
-### Q: 怎么指定使用哪张 GPU？
-
-```bash
-CUDA_VISIBLE_DEVICES=2 fast3d-mocap-server --source 0 ...
-```
-
----
-
 ## License
 
 MIT
