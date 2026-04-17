@@ -103,7 +103,7 @@ pip install -e ".[server,setup]"
 fast3d-download-assets --project-root /path/to/Fast-SAM-3D-Body
 ```
 
-该命令自动从 [ModelScope: Dylan4X/fast3d-teleop-assets](https://modelscope.cn/models/Dylan4X/fast3d-teleop-assets) 下载所有模型权重并放置到正确目录。
+该命令自动从 [ModelScope: XDRRRR/fast3d-teleop-assets](https://modelscope.cn/models/XDRRRR/fast3d-teleop-assets) 下载所有模型权重并放置到正确目录。
 
 下载内容（约 2.5GB）：
 

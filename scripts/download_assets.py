@@ -21,7 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 
-MODELSCOPE_REPO = "Dylan4X/fast3d-teleop-assets"
+MODELSCOPE_REPO = "XDRRRR/fast3d-teleop-assets"
 
 # (src_relative_in_repo, dst_relative_in_project_root)
 ASSET_MAP: list[tuple[str, str]] = [
